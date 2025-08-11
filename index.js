@@ -63,6 +63,7 @@ async function getRoadDistance(origin, dest) {
                 ],
                 metrics: ['distance']
             },
+
             {
                 headers: {
                     'Authorization': "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImU0MTYzYWQwMjU5MzRiZDZiODA1NDU5YmUzYmE5NDNiIiwiaCI6Im11cm11cjY0In0=",
@@ -70,6 +71,8 @@ async function getRoadDistance(origin, dest) {
                 }
             }
         );
+        console.log(response, "djdjdjdjdjdj")
+
 
         const distanceInMeters = response.data.distances[0][1];
         return distanceInMeters / 1000;
@@ -147,7 +150,7 @@ app.post('/shipping-rate', async (req, res) => {
 
     const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
     const fuelSurchargeRate = 0.12;
-console.log("weightCost" , weightCost)
+    console.log("weightCost", weightCost)
     const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr + weightCost;
     const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
 
