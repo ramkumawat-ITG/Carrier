@@ -6,10 +6,9 @@ const app = express();
 app.use(cors({ origin: 'https://*.myshopify.com' }));
 app.use(express.json());
 
-// Origin coordinates (configurable via env, fallback to MP center)
 const origin = {
-    lat: Number(process.env.ORIGIN_LAT) || 23.4733,
-    lon: Number(process.env.ORIGIN_LON) || 77.947998
+    lat: 23.4733,
+    lon: 77.947998
 };
 
 // State coordinates
@@ -52,7 +51,6 @@ const stateCoordinates = {
     'WB': { lat: 22.9868, lon: 87.8550 }  // West Bengal
 };
 
-// Google Maps Distance Matrix API
 // OpenRouteService Distance Matrix API
 async function getRoadDistance(origin, dest) {
     try {
@@ -74,10 +72,10 @@ async function getRoadDistance(origin, dest) {
         );
 
         const distanceInMeters = response.data.distances[0][1];
-        return distanceInMeters / 1000; // Convert to km
+        return distanceInMeters / 1000;
     } catch (error) {
         console.error("OpenRouteService API error:", error.message);
-        return getDistance(origin.lat, origin.lon, dest.lat, dest.lon); // Fallback to Haversine
+        return getDistance(origin.lat, origin.lon, dest.lat, dest.lon);
     }
 }
 
@@ -96,6 +94,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+
 app.post('/shipping-rate', async (req, res) => {
     console.log("Shopify callback body:", JSON.stringify(req.body, null, 2));
 
@@ -103,62 +102,64 @@ app.post('/shipping-rate', async (req, res) => {
     const province = (req.body?.rate?.destination?.province_code || req.body?.rate?.destination?.province)?.toUpperCase();
 
     if (!country || !province) {
-        console.log("Missing country or province:", { country, province });
         return res.json({ rates: [] });
     }
 
     if (country !== 'IN') {
-        console.log("Non-India country detected:", country);
         return res.json({ rates: [] });
     }
+
+    // Get product weight (in kg)
+    const items = req.body?.rate?.items || [];
+    if (!items.length) {
+        return res.json({ rates: [] });
+    }
+
+    let totalWeightKg = 0;
+    for (let item of items) {
+        if (!item.grams || item.grams <= 0) {
+            console.log("Missing or zero weight detected → No shipping");
+            return res.json({ rates: [] });
+        }
+        totalWeightKg += (item.grams / 1000) * item.quantity;
+    }
+
+    // Weight-based cost
+    let weightCost = 0;
+    if (totalWeightKg <= 5) weightCost = 10;
+    else if (totalWeightKg <= 10) weightCost = 25;
+    else if (totalWeightKg <= 25) weightCost = 50;
+    else weightCost = 100; // fallback if > 25kg
 
     const dest = stateCoordinates[province];
     if (!dest) {
-        console.log("Invalid province code:", province);
         return res.json({ rates: [] });
     }
 
-    // Use Google Maps API for distance
     const distance = await getRoadDistance(origin, dest);
 
-    // Fixed values since weight is removed (assuming default for 1kg equivalent)
+    // Fixed values
     let baseFeeInInr = 60;
     let perKmInInr = 1.0;
 
     const packagingFeeInInr = 10;
     const baseTransportCostInInr = distance * perKmInInr;
+
     const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
     const fuelSurchargeRate = 0.12;
 
-    const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr;
+    const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr + weightCost;
     const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
 
     const services = [
-        {
-            key: 'EXPRESS',
-            name: 'Express Shipping',
-            multiplier: 1.25,
-            minDays: 1,
-            maxDays: 2
-        },
-        {
-            key: 'STANDARD',
-            name: 'Standard Shipping',
-            multiplier: 1.0,
-            minDays: 2,
-            maxDays: 5
-        },
-        {
-            key: 'ECONOMY',
-            name: 'Economy Shipping',
-            multiplier: 0.85,
-            minDays: 4,
-            maxDays: 8
-        }
+        { key: 'EXPRESS', name: 'Express Shipping', multiplier: 1.25, minDays: 1, maxDays: 2 },
+        { key: 'STANDARD', name: 'Standard Shipping', multiplier: 1.0, minDays: 2, maxDays: 5 },
+        { key: 'ECONOMY', name: 'Economy Shipping', multiplier: 0.85, minDays: 4, maxDays: 8 }
     ];
 
     const now = Date.now();
     const minimumChargeInInr = 30;
+
     const rates = services.map(svc => {
         const finalInInr = Math.max(minimumChargeInInr, surchargedInInr * svc.multiplier);
         return {
@@ -171,13 +172,9 @@ app.post('/shipping-rate', async (req, res) => {
         };
     });
 
-    console.log("Origin:", origin);
-    console.log("Destination:", dest);
-    console.log("Distance:", distance.toFixed(2), "km");
-    console.log("Base Transport Cost:", baseTransportCostInInr.toFixed(2), "INR");
-    console.log("Calculated rates:", JSON.stringify(rates, null, 2));
     res.json({ rates });
 });
+
 
 app.listen(8080, () => {
     console.log('Server running on port 8080');
