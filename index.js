@@ -52,6 +52,35 @@ const stateCoordinates = {
     'WB': { lat: 22.9868, lon: 87.8550 }  // West Bengal
 };
 
+// Configuration: base price by state (INR)
+const stateBaseInInr = {
+    RJ: 300,
+    // Add more states as needed. Unlisted states will use defaultBaseInInr
+};
+
+const defaultBaseInInr = 0;
+
+// Configuration: weight tier prices (INR) based on package total weight in KG
+// Price corresponds to the entire package up to the tier's maxKg
+const weightTiersInInr = [
+    { maxKg: 0.5, priceInInr: 80 },
+    { maxKg: 1, priceInInr: 120 },
+    { maxKg: 2, priceInInr: 200 },
+    { maxKg: 5, priceInInr: 500 }, // example: 5 kg = 500
+    { maxKg: 10, priceInInr: 900 }
+];
+
+function getWeightTierPrice(totalWeightKg) {
+    for (const tier of weightTiersInInr) {
+        if (totalWeightKg <= tier.maxKg) return tier.priceInInr;
+    }
+    // If above highest tier, charge extra per kg beyond last tier
+    const lastTier = weightTiersInInr[weightTiersInInr.length - 1];
+    const extraKgs = Math.ceil(totalWeightKg - lastTier.maxKg);
+    const extraPerKgInInr = 120; // overflow rate per kg
+    return lastTier.priceInInr + extraKgs * extraPerKgInInr;
+}
+
 // Haversine formula for distance in KM
 function getDistance(lat1, lon1, lat2, lon2) {
     const R = 6371; // Radius of Earth in km
@@ -73,46 +102,18 @@ app.post('/shipping-rate', (req, res) => {
     const province = req.body?.rate?.destination?.province_code
         || req.body?.rate?.destination?.province;
     if (country !== 'IN') {
-        return res.json({ rates: [] }); 
+        return res.json({ rates: [] });
     }
-
-    const dest = stateCoordinates[province];
-    if (!dest) {
-        return res.json({ rates: [] }); // Unknown state
-    }
-
-    const distance = getDistance(origin.lat, origin.lon, dest.lat, dest.lon);
 
     // Weight from Shopify payload (grams)
     const totalWeightGrams = Number(req.body?.rate?.total_weight) || 0;
     const totalWeightKg = Math.max(totalWeightGrams / 1000, 0.1); // assume at least 100g
 
-    // Tiered base and per-km-per-kg rate (INR)
-    let baseFeeInInr = 30; // handling/base
-    let perKmPerKgInInr = 1.0;
-    if (totalWeightKg <= 0.5) {
-        baseFeeInInr = 40;
-        perKmPerKgInInr = 0.8;
-    } else if (totalWeightKg <= 1) {
-        baseFeeInInr = 60;
-        perKmPerKgInInr = 1.0;
-    } else if (totalWeightKg <= 5) {
-        baseFeeInInr = 80;
-        perKmPerKgInInr = 1.3;
-    } else {
-        baseFeeInInr = 120;
-        perKmPerKgInInr = 1.6 + 0.1 * Math.floor((totalWeightKg - 5) / 5);
-    }
-
-    const packagingFeeInInr = 10;
-    const baseTransportCostInInr = distance * perKmPerKgInInr * Math.max(totalWeightKg, 0.5);
-
-    // Optional surcharge for long distances
-    const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
-    const fuelSurchargeRate = 0.12; // 12%
-
-    const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr;
-    const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
+    // Calculate base by state and price by weight tier
+    const provinceCode = String(province || '').toUpperCase();
+    const stateBase = stateBaseInInr[provinceCode] ?? defaultBaseInInr;
+    const weightPrice = getWeightTierPrice(totalWeightKg);
+    const standardBaseInInr = stateBase + weightPrice;
 
     // Service multipliers and delivery windows
     const services = [
@@ -142,7 +143,7 @@ app.post('/shipping-rate', (req, res) => {
     const now = Date.now();
     const minimumChargeInInr = 30;
     const rates = services.map(svc => {
-        const finalInInr = Math.max(minimumChargeInInr, surchargedInInr * svc.multiplier);
+        const finalInInr = Math.max(minimumChargeInInr, standardBaseInInr * svc.multiplier);
         return {
             service_name: `${svc.name} (${province})`,
             service_code: `${province}_${svc.key}`,
@@ -153,8 +154,10 @@ app.post('/shipping-rate', (req, res) => {
         };
     });
 
-    console.log("Distance:", distance.toFixed(2), "km");
+    console.log("Province:", provinceCode);
     console.log("Weight:", totalWeightKg.toFixed(2), "kg");
+    console.log("State base (INR):", stateBase);
+    console.log("Weight tier price (INR):", weightPrice);
     console.log("Calculated rates:", rates);
     res.json({ rates });
 });
