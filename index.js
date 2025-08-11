@@ -67,8 +67,8 @@ app.post('/shipping-rate', (req, res) => {
     console.log("Shopify callback body:", req.body);
 
     const country = req.body?.rate?.destination?.country;
-    const province = req.body?.rate?.destination?.province_code;
-
+    const province = req.body?.rate?.destination?.province_code
+        || req.body?.rate?.destination?.province;
     if (country !== 'IN') {
         return res.json({ rates: [] }); // Only India supported
     }
