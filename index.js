@@ -1,9 +1,9 @@
-
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: 'https://*.myshopify.com' }));
 app.use(express.json());
 
 // Origin coordinates (configurable via env, fallback to MP center)
@@ -12,7 +12,7 @@ const origin = {
     lon: Number(process.env.ORIGIN_LON) || 77.947998
 };
 
-// Few states with coordinates (You can add all later)
+// State coordinates
 const stateCoordinates = {
     'AN': { lat: 11.7401, lon: 92.6586 }, // Andaman and Nicobar Islands
     'AP': { lat: 15.9129, lon: 79.7400 }, // Andhra Pradesh
@@ -52,38 +52,39 @@ const stateCoordinates = {
     'WB': { lat: 22.9868, lon: 87.8550 }  // West Bengal
 };
 
-// Configuration: base price by state (INR)
-const stateBaseInInr = {
-    RJ: 300,
-    // Add more states as needed. Unlisted states will use defaultBaseInInr
-};
+// Google Maps Distance Matrix API
+// OpenRouteService Distance Matrix API
+async function getRoadDistance(origin, dest) {
+    try {
+        const response = await axios.post(
+            'https://api.openrouteservice.org/v2/matrix/driving-car',
+            {
+                locations: [
+                    [origin.lon, origin.lat],
+                    [dest.lon, dest.lat]
+                ],
+                metrics: ['distance']
+            },
+            {
+                headers: {
+                    'Authorization': "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImU0MTYzYWQwMjU5MzRiZDZiODA1NDU5YmUzYmE5NDNiIiwiaCI6Im11cm11cjY0In0=",
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
 
-const defaultBaseInInr = 0;
-
-// Configuration: weight tier prices (INR) based on package total weight in KG
-// Price corresponds to the entire package up to the tier's maxKg
-const weightTiersInInr = [
-    { maxKg: 0.5, priceInInr: 80 },
-    { maxKg: 1, priceInInr: 120 },
-    { maxKg: 2, priceInInr: 200 },
-    { maxKg: 5, priceInInr: 500 }, // example: 5 kg = 500
-    { maxKg: 10, priceInInr: 900 }
-];
-
-function getWeightTierPrice(totalWeightKg) {
-    for (const tier of weightTiersInInr) {
-        if (totalWeightKg <= tier.maxKg) return tier.priceInInr;
+        const distanceInMeters = response.data.distances[0][1];
+        return distanceInMeters / 1000; // Convert to km
+    } catch (error) {
+        console.error("OpenRouteService API error:", error.message);
+        return getDistance(origin.lat, origin.lon, dest.lat, dest.lon); // Fallback to Haversine
     }
-    // If above highest tier, charge extra per kg beyond last tier
-    const lastTier = weightTiersInInr[weightTiersInInr.length - 1];
-    const extraKgs = Math.ceil(totalWeightKg - lastTier.maxKg);
-    const extraPerKgInInr = 120; // overflow rate per kg
-    return lastTier.priceInInr + extraKgs * extraPerKgInInr;
 }
 
-// Haversine formula for distance in KM
+
+// Haversine formula (as fallback)
 function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Radius of Earth in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a =
@@ -95,27 +96,43 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-app.post('/shipping-rate', (req, res) => {
-    console.log("Shopify callback body:", req.body);
+app.post('/shipping-rate', async (req, res) => {
+    console.log("Shopify callback body:", JSON.stringify(req.body, null, 2));
 
     const country = req.body?.rate?.destination?.country;
-    const province = req.body?.rate?.destination?.province_code
-        || req.body?.rate?.destination?.province;
-    if (country !== 'IN') {
+    const province = (req.body?.rate?.destination?.province_code || req.body?.rate?.destination?.province)?.toUpperCase();
+
+    if (!country || !province) {
+        console.log("Missing country or province:", { country, province });
         return res.json({ rates: [] });
     }
 
-    // Weight from Shopify payload (grams)
-    const totalWeightGrams = Number(req.body?.rate?.total_weight) || 0;
-    const totalWeightKg = Math.max(totalWeightGrams / 1000, 0.1); // assume at least 100g
+    if (country !== 'IN') {
+        console.log("Non-India country detected:", country);
+        return res.json({ rates: [] });
+    }
 
-    // Calculate base by state and price by weight tier
-    const provinceCode = String(province || '').toUpperCase();
-    const stateBase = stateBaseInInr[provinceCode] ?? defaultBaseInInr;
-    const weightPrice = getWeightTierPrice(totalWeightKg);
-    const standardBaseInInr = stateBase + weightPrice;
+    const dest = stateCoordinates[province];
+    if (!dest) {
+        console.log("Invalid province code:", province);
+        return res.json({ rates: [] });
+    }
 
-    // Service multipliers and delivery windows
+    // Use Google Maps API for distance
+    const distance = await getRoadDistance(origin, dest);
+
+    // Fixed values since weight is removed (assuming default for 1kg equivalent)
+    let baseFeeInInr = 60;
+    let perKmInInr = 1.0;
+
+    const packagingFeeInInr = 10;
+    const baseTransportCostInInr = distance * perKmInInr;
+    const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
+    const fuelSurchargeRate = 0.12;
+
+    const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr;
+    const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
+
     const services = [
         {
             key: 'EXPRESS',
@@ -143,22 +160,22 @@ app.post('/shipping-rate', (req, res) => {
     const now = Date.now();
     const minimumChargeInInr = 30;
     const rates = services.map(svc => {
-        const finalInInr = Math.max(minimumChargeInInr, standardBaseInInr * svc.multiplier);
+        const finalInInr = Math.max(minimumChargeInInr, surchargedInInr * svc.multiplier);
         return {
             service_name: `${svc.name} (${province})`,
             service_code: `${province}_${svc.key}`,
-            total_price: Math.round(finalInInr * 100), // paise
+            total_price: Math.round(finalInInr * 100),
             currency: 'INR',
             min_delivery_date: new Date(now).toISOString(),
             max_delivery_date: new Date(now + svc.maxDays * 24 * 60 * 60 * 1000).toISOString()
         };
     });
 
-    console.log("Province:", provinceCode);
-    console.log("Weight:", totalWeightKg.toFixed(2), "kg");
-    console.log("State base (INR):", stateBase);
-    console.log("Weight tier price (INR):", weightPrice);
-    console.log("Calculated rates:", rates);
+    console.log("Origin:", origin);
+    console.log("Destination:", dest);
+    console.log("Distance:", distance.toFixed(2), "km");
+    console.log("Base Transport Cost:", baseTransportCostInInr.toFixed(2), "INR");
+    console.log("Calculated rates:", JSON.stringify(rates, null, 2));
     res.json({ rates });
 });
 
