@@ -1,18 +1,34 @@
+
+
 const express = require('express');
-const server = express();
 const cors = require('cors');
-server.use(cors());
-server.use(express.json());
+const app = express();
 
+app.use(cors());
+app.use(express.json());
 
-server.post('/shipping-rate',(req,res)=>{
-    const body = req.body;
-    console.log(body);
-    res.json({
-        data:body
-    })
+app.post('/shipping-rate', (req, res) => {
+    console.log("Shopify callback body:", req.body);
+
+    const country = req.body?.rate?.destination?.country;
+
+    let rates = [];
+
+    if (country === 'CA') {
+        rates.push({
+            service_name: "Canada Flat Rate",
+            service_code: "CANADA_FLAT",
+            total_price: 500, // cents me, yani $5
+            currency: "USD",
+            min_delivery_date: new Date().toISOString(),
+            max_delivery_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString()
+        });
+    }
+    console.log(rates)
+
+    res.json({ rates });
 });
 
-server.listen(8080,async ()=>{
-    console.log('server conect');
+app.listen(8080, () => {
+    console.log('Server running on port 8080');
 });
