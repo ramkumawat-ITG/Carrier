@@ -147,7 +147,7 @@ app.post('/shipping-rate', async (req, res) => {
 
     const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
     const fuelSurchargeRate = 0.12;
-
+console.log("weightCost" , weightCost)
     const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr + weightCost;
     const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
 
@@ -171,6 +171,12 @@ app.post('/shipping-rate', async (req, res) => {
             max_delivery_date: new Date(now + svc.maxDays * 24 * 60 * 60 * 1000).toISOString()
         };
     });
+
+    console.log("Origin:", origin);
+    console.log("Destination:", dest);
+    console.log("Distance:", distance.toFixed(2), "km");
+    console.log("Base Transport Cost:", baseTransportCostInInr.toFixed(2), "INR");
+    console.log("Calculated rates:", JSON.stringify(rates, null, 2));
 
     res.json({ rates });
 });
