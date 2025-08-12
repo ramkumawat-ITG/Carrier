@@ -97,7 +97,6 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-
 app.post('/shipping-rate', async (req, res) => {
     console.log("Shopify callback body:", JSON.stringify(req.body, null, 2));
 
@@ -127,12 +126,12 @@ app.post('/shipping-rate', async (req, res) => {
         totalWeightKg += (item.grams / 1000) * item.quantity;
     }
 
-    // Weight-based cost
+    // Weight-based cost slab (₹)
     let weightCost = 0;
     if (totalWeightKg <= 5) weightCost = 10;
     else if (totalWeightKg <= 10) weightCost = 25;
     else if (totalWeightKg <= 25) weightCost = 50;
-    else weightCost = 100; // fallback if > 25kg
+    else weightCost = 100;
 
     const dest = stateCoordinates[province];
     if (!dest) {
@@ -141,48 +140,38 @@ app.post('/shipping-rate', async (req, res) => {
 
     const distance = await getRoadDistance(origin, dest);
 
-    // Fixed values
-    let baseFeeInInr = 60;
-    let perKmInInr = 1.0;
+    // Per km rate (₹)
+    const perKmInInr = 1.0;
+    const distanceCost = distance * perKmInInr;
 
-    const packagingFeeInInr = 10;
-    const baseTransportCostInInr = distance * perKmInInr;
-
-    const remoteAreaSurchargeRate = distance > 1500 ? 0.05 : 0;
-    const fuelSurchargeRate = 0.12;
-    console.log("weightCost", weightCost)
-    const subTotalInInr = baseFeeInInr + packagingFeeInInr + baseTransportCostInInr + weightCost;
-    const surchargedInInr = subTotalInInr * (1 + fuelSurchargeRate + remoteAreaSurchargeRate);
-
-    const services = [
-        { key: 'EXPRESS', name: 'Express Shipping', multiplier: 1.25, minDays: 1, maxDays: 2 },
-        { key: 'STANDARD', name: 'Standard Shipping', multiplier: 1.0, minDays: 2, maxDays: 5 },
-        { key: 'ECONOMY', name: 'Economy Shipping', multiplier: 0.85, minDays: 4, maxDays: 8 }
-    ];
+    // Final cost = weightCost + distanceCost
+    const totalCostInInr = weightCost + distanceCost;
 
     const now = Date.now();
-    const minimumChargeInInr = 30;
 
-    const rates = services.map(svc => {
-        const finalInInr = Math.max(minimumChargeInInr, surchargedInInr * svc.multiplier);
-        return {
-            service_name: `${svc.name} (${province})`,
-            service_code: `${province}_${svc.key}`,
-            total_price: Math.round(finalInInr * 100),
+    const rates = [
+        {
+            service_name: `Shipping (${province})`,
+            service_code: `${province}_WD`,
+            total_price: Math.round(totalCostInInr * 100), // in paise
             currency: 'INR',
             min_delivery_date: new Date(now).toISOString(),
-            max_delivery_date: new Date(now + svc.maxDays * 24 * 60 * 60 * 1000).toISOString()
-        };
-    });
+            max_delivery_date: new Date(now + 5 * 24 * 60 * 60 * 1000).toISOString()
+        }
+    ];
 
     console.log("Origin:", origin);
     console.log("Destination:", dest);
     console.log("Distance:", distance.toFixed(2), "km");
-    console.log("Base Transport Cost:", baseTransportCostInInr.toFixed(2), "INR");
-    console.log("Calculated rates:", JSON.stringify(rates, null, 2));
+    console.log("Weight:", totalWeightKg, "kg");
+    console.log("Weight Cost:", weightCost, "INR");
+    console.log("Distance Cost:", distanceCost.toFixed(2), "INR");
+    console.log("Final Cost:", totalCostInInr.toFixed(2), "INR");
 
     res.json({ rates });
 });
+
+
 
 
 app.listen(8080, () => {
