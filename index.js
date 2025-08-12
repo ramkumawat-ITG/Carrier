@@ -103,70 +103,74 @@ app.post('/shipping-rate', async (req, res) => {
     const country = req.body?.rate?.destination?.country;
     const province = (req.body?.rate?.destination?.province_code || req.body?.rate?.destination?.province)?.toUpperCase();
 
-    if (!country || !province) {
-        return res.json({ rates: [] });
-    }
-
-    if (country !== 'IN') {
+    if (!country || !province || country !== 'IN') {
         return res.json({ rates: [] });
     }
 
     // Get product weight (in kg)
     const items = req.body?.rate?.items || [];
-    if (!items.length) {
-        return res.json({ rates: [] });
-    }
+    if (!items.length) return res.json({ rates: [] });
 
     let totalWeightKg = 0;
     for (let item of items) {
-        if (!item.grams || item.grams <= 0) {
-            console.log("Missing or zero weight detected → No shipping");
-            return res.json({ rates: [] });
-        }
+        if (!item.grams || item.grams <= 0) return res.json({ rates: [] });
         totalWeightKg += (item.grams / 1000) * item.quantity;
     }
 
-    // Weight-based cost slab (₹)
-    let weightCost = 0;
-    if (totalWeightKg <= 5) weightCost = 10;
-    else if (totalWeightKg <= 10) weightCost = 25;
-    else if (totalWeightKg <= 25) weightCost = 50;
-    else weightCost = 100;
-
+    // Get destination coordinates
     const dest = stateCoordinates[province];
-    if (!dest) {
-        return res.json({ rates: [] });
-    }
+    if (!dest) return res.json({ rates: [] });
 
+    // Origin coordinates (Example: New Delhi)
+
+    // Calculate distance in km
     const distance = await getRoadDistance(origin, dest);
 
-    // Per km rate (₹)
-    const perKmInInr = 1.0;
-    const distanceCost = distance * perKmInInr;
+    // Per km rates
+    const perKmRates = {
+        EXPRESS: 2.0,   // INR/km
+        STANDARD: 1.2,  // INR/km
+        ECONOMY: 0.8    // INR/km
+    };
 
-    // Final cost = weightCost + distanceCost
-    const totalCostInInr = weightCost + distanceCost;
+    // Weight-based costs
+    function getWeightCost(type, weightKg) {
+        if (weightKg <= 5) return { EXPRESS: 30, STANDARD: 20, ECONOMY: 10 }[type];
+        else if (weightKg <= 10) return { EXPRESS: 60, STANDARD: 40, ECONOMY: 25 }[type];
+        else if (weightKg <= 25) return { EXPRESS: 120, STANDARD: 80, ECONOMY: 50 }[type];
+        else return { EXPRESS: 200, STANDARD: 150, ECONOMY: 100 }[type];
+    }
 
     const now = Date.now();
+    const minimumChargeInInr = 30;
 
-    const rates = [
-        {
-            service_name: `Shipping (${province})`,
-            service_code: `${province}_WD`,
-            total_price: Math.round(totalCostInInr * 100), // in paise
-            currency: 'INR',
-            min_delivery_date: new Date(now).toISOString(),
-            max_delivery_date: new Date(now + 5 * 24 * 60 * 60 * 1000).toISOString()
-        }
+    // Shipping services
+    const services = [
+        { key: 'EXPRESS', name: 'Express Shipping', minDays: 1, maxDays: 2 },
+        { key: 'STANDARD', name: 'Standard Shipping', minDays: 2, maxDays: 5 },
+        { key: 'ECONOMY', name: 'Economy Shipping', minDays: 4, maxDays: 8 }
     ];
+
+    const rates = services.map(svc => {
+        const perKmInInr = perKmRates[svc.key];
+        const weightCost = getWeightCost(svc.key, totalWeightKg);
+        const baseTransportCostInInr = distance * perKmInInr;
+        const finalInInr = Math.max(minimumChargeInInr, baseTransportCostInInr + weightCost);
+
+        return {
+            service_name: `${svc.name} (${province})`,
+            service_code: `${province}_${svc.key}`,
+            total_price: Math.round(finalInInr * 100), // Shopify wants paise
+            currency: 'INR',
+            min_delivery_date: new Date(now + svc.minDays * 24 * 60 * 60 * 1000).toISOString(),
+            max_delivery_date: new Date(now + svc.maxDays * 24 * 60 * 60 * 1000).toISOString()
+        };
+    });
 
     console.log("Origin:", origin);
     console.log("Destination:", dest);
     console.log("Distance:", distance.toFixed(2), "km");
-    console.log("Weight:", totalWeightKg, "kg");
-    console.log("Weight Cost:", weightCost, "INR");
-    console.log("Distance Cost:", distanceCost.toFixed(2), "INR");
-    console.log("Final Cost:", totalCostInInr.toFixed(2), "INR");
+    console.log("Calculated rates:", JSON.stringify(rates, null, 2));
 
     res.json({ rates });
 });
